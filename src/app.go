@@ -20,14 +20,17 @@ func dbConn( i *int) (db *sql.DB) {
 
 	for *i>5{
 		fmt.Printf("connection count greater than 5..sleeping for now\n")
-		time.Sleep(time.Second * 3)
-		*i--;
+		time.Sleep(time.Second * 1)
+		*i=0;
 		}
 
 	db, err := sql.Open(dbDriver, dbUser+":"+dbPass+"@/"+dbName)
 	if err != nil {
 		panic(err.Error())
 	}
+
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(0)
 	*i++
 	fmt.Printf("### current connection count %d\n",*i)
 	return db
@@ -110,8 +113,11 @@ func isURLExists(conn *sql.DB, url string, params string) *sql.Rows {
 }
 
 // func crawl(url string, conn *sql.DB, visited map[string]int, msg chan string) {
-	func crawl(url string,visited map[string]int, connCount *int) {
+	func crawl(url string,visited map[string]int, connCount *int) <-chan int{
 
+		r:=make(chan int)
+		defer close(r)
+	
 	fmt.Printf("######## visiting %s\n", url)
 
 	val, exists := visited[url]
@@ -122,7 +128,8 @@ func isURLExists(conn *sql.DB, url string, params string) *sql.Rows {
 
 
 	if urlParts == nil {
-		return
+		r<-0
+		return r
 	}
 
 
@@ -142,7 +149,8 @@ func isURLExists(conn *sql.DB, url string, params string) *sql.Rows {
 		visited[url] = visited[url] + 1
 		// messages := <-msg
 		// fmt.Println(messages)
-		return
+		r<-1
+		return r
 	} else {
 		visited[url] = 1
 	}
@@ -153,6 +161,8 @@ func isURLExists(conn *sql.DB, url string, params string) *sql.Rows {
 	resp, err := http.Get(urlParts[0])
 	if err != nil {
 		fmt.Printf("error while visiting: %s\n",urlParts[0])
+		r <- 1
+		return r
 	}
 
 
@@ -160,7 +170,8 @@ func isURLExists(conn *sql.DB, url string, params string) *sql.Rows {
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		fmt.Printf("unable to read documents %s\n",err.Error())
-		return
+		r <- 0
+		return r
 	}
 
 	// Save each .post-title as a list
@@ -169,9 +180,11 @@ func isURLExists(conn *sql.DB, url string, params string) *sql.Rows {
 		link, _ := s.Attr("href")
 		fmt.Printf("Post #%d: %s - %s\n", i, title, link)	
 		fmt.Printf("### recursion passing connCount: %d\n", connCount)
-		crawl(link,visited,connCount)
+		go crawl(link,visited,connCount)
 	})
 	// return titles, nil
+	r <- 1
+	return r
 }
 
 func main() {
@@ -196,6 +209,9 @@ func main() {
 
 	fmt.Printf("$$$$$$$$$$$$b %d \n",*b);
 
-	// <-messages
+	aCh, fCh, cCh, dCH, eCH := crawl(url, visited, &i), crawl(url, visited, &i), crawl(url, visited, &i), crawl(url, visited, &i), crawl(url, visited, &i)
+	a, f, c,d,e := <-aCh, <-fCh, <-cCh, <-dCH, <-eCH
+	
+	fmt.Println(a, f, c,d,e)
 
 }
