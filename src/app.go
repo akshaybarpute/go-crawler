@@ -4,21 +4,32 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-
+	"time"
+	"net/http"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/gocolly/colly"
-	_ "github.com/gocolly/colly"
+	"github.com/PuerkitoBio/goquery"
 )
 
-func dbConn() (db *sql.DB) {
+func dbConn( i *int) (db *sql.DB) {
 	dbDriver := "mysql"
 	dbUser := "manager"
 	dbPass := "manager"
 	dbName := "crawler"
+
+	fmt.Printf("### current connection count %d\n",i)
+
+	for *i>5{
+		fmt.Printf("connection count greater than 5..sleeping for now\n")
+		time.Sleep(time.Second * 3)
+		*i--;
+		}
+
 	db, err := sql.Open(dbDriver, dbUser+":"+dbPass+"@/"+dbName)
 	if err != nil {
 		panic(err.Error())
 	}
+	*i++
+	fmt.Printf("### current connection count %d\n",*i)
 	return db
 }
 
@@ -51,18 +62,24 @@ func parseURL(url string) []string {
 	return strArray
 }
 
-func addRecords(conn *sql.DB, url string, params string) *sql.Rows {
+func addRecords(url string, params string, i *int) *sql.Rows {
 
-	fmt.Println("inside the addRecords")
+	fmt.Printf("inside the addRecords %d \n ", i)
 
+		conn := dbConn(i)
+
+	fmt.Printf("### current connection count value froma addRecords %d\n",*i)
 	query := "INSERT INTO crawled(url,params) VALUES (?,?)"
 
 	result, err := conn.Query(query, url, params)
 
 	if err != nil {
 		panic(err.Error())
+		conn.Close()
 	}
 
+	conn.Close()
+	// *i--;
 	return result
 }
 
@@ -92,7 +109,8 @@ func isURLExists(conn *sql.DB, url string, params string) *sql.Rows {
 	return result
 }
 
-func crawl(url string, c *colly.Collector, conn *sql.DB, visited map[string]int, msg chan string) {
+// func crawl(url string, conn *sql.DB, visited map[string]int, msg chan string) {
+	func crawl(url string,visited map[string]int, connCount *int) {
 
 	fmt.Printf("######## visiting %s\n", url)
 
@@ -102,9 +120,11 @@ func crawl(url string, c *colly.Collector, conn *sql.DB, visited map[string]int,
 
 	urlParts := parseURL(url)
 
+
 	if urlParts == nil {
 		return
 	}
+
 
 	params := ""
 
@@ -114,60 +134,68 @@ func crawl(url string, c *colly.Collector, conn *sql.DB, visited map[string]int,
 
 	fmt.Printf("\n url: %s \n params: %d", urlParts[0], len(urlParts))
 
-	addRecords(conn, urlParts[0], params)
+	addRecords(urlParts[0], params, connCount)
 
-	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
-		newURL := e.Attr("href")
-		fmt.Printf("newUrl: %s: ", newURL)
-		crawl(newURL, c, conn, visited, msg)
-	})
 
-	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Visiting", r.URL)
-	})
-
-	c.OnError(func(r *colly.Response, err error) {
-		fmt.Println("Request URL:", r.Request.URL, "failed with response:", r, "\nError:", err)
-	})
-
-	if !exists {
-		visited[url] = 1
-		c.Visit(urlParts[0])
-		messages := <-msg
-		fmt.Println(messages)
-	} else {
+	// If url already crawled increment count & exit. otherwise register & crawl
+	if exists {
 		visited[url] = visited[url] + 1
+		// messages := <-msg
+		// fmt.Println(messages)
+		return
+	} else {
+		visited[url] = 1
 	}
 
+
+
+	// Get the HTML
+	resp, err := http.Get(urlParts[0])
+	if err != nil {
+		fmt.Printf("error while visiting: %s\n",urlParts[0])
+	}
+
+
+	// Convert HTML into goquery document
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		fmt.Printf("unable to read documents %s\n",err.Error())
+		return
+	}
+
+	// Save each .post-title as a list
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		title := s.Text()
+		link, _ := s.Attr("href")
+		fmt.Printf("Post #%d: %s - %s\n", i, title, link)	
+		fmt.Printf("### recursion passing connCount: %d\n", connCount)
+		crawl(link,visited,connCount)
+	})
+	// return titles, nil
 }
 
 func main() {
 	// conn := dbConn()
-	c := colly.NewCollector(colly.MaxDepth(10))
+	// c := colly.NewCollector(colly.MaxDepth(10))
 	url := "https://medium.com"
-	messages := make(chan string, 5)
+	// messages := make(chan string, 5)
 	var visited map[string]int
 	visited = make(map[string]int)
 	// msg := <-messages
 	// fmt.Println(msg)
 	// sleep
-	defer conn.Close()
+	// defer conn.Close()
 
-	go crawl(url, c, conn, visited, messages)
+	// crawl(url,conn, visited, messages)
+	i:=0
+	b:=&i
+	*b++;
+	fmt.Printf("b %d \n",*b);
+	crawl(url,visited,&i)
+	time.Sleep(time.Second * 5)
 
-	<-messages
+	fmt.Printf("$$$$$$$$$$$$b %d \n",*b);
 
-	c := colly.NewCollector()
-
-	// Find and visit all links
-	// c.OnHTML("a[href]", func(e *colly.HTMLElement) {
-	// 	e.Request.Visit(e.Attr("href"))
-	// })
-
-	// c.OnRequest(func(r *colly.Request) {
-	// 	fmt.Println("Visiting", r.URL)
-	// })
-
-	// c.Visit(url)
+	// <-messages
 
 }
